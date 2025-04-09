@@ -1,1 +1,1 @@
-# tmdbs_movie_profitability_analysis
+# TMDb_movie_profitability_analysis

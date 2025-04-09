@@ -1,0 +1,409 @@
+---
+title: "TMDb Movie Profitability Analysis"
+output: 
+  pdf_document: 
+    number_sections: true
+---
+
+**Background**
+
+_**What can we say about the success of a movie before it is released?**_ Are there certain companies (Pixar?) that have found a consistent formula? Given that major films costing over $100 million to produce can still flop, this question is more important than ever to the industry. Film aficionados might have different interests. Can we predict which films will be highly rated, whether or not they are a commercial success?
+
+This is a great place to start digging in to those questions, with data on the plot, cast, crew, budget, and revenues of several thousand films.
+
+Click [_here_](https://www.kaggle.com/datasets/tmdb/tmdb-movie-metadata) to check out data source from Kaggle.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(tidyverse)
+library(corrr)
+library(wordcloud2)
+library(scales)
+```
+
+```{r data_cleaning, include=FALSE}
+movie_cast <- read_csv('tmdb_5000_credits.csv') %>%
+  mutate(movie_id = as.character(movie_id)) %>%
+  select(-crew)
+
+movie_stat <- read_csv('tmdb_5000_movies.csv') %>%
+  mutate(id = as.character(id)) %>%
+  select(-c(title, homepage, original_language, original_title, status))
+
+# Join both data set based on common columns
+movie.df <- movie_cast %>%
+  left_join(
+    movie_stat,
+    by = join_by(movie_id == id),
+    keep = FALSE
+  )
+
+# Original data set are no longer required, hence removed
+rm(movie_cast)
+rm(movie_stat)
+
+# Manually assign values to release_date and run time with missing values (NA's)
+movie.df[movie.df$title == "Chiamatemi Francesco - Il Papa della gente", "runtime"] = 98
+movie.df[movie.df$title == "To Be Frank, Sinatra at 100", "runtime"] = 81
+
+# "America Is Still the Place" is not a movie hence excluded
+movie.df <- movie.df %>% filter(!is.na(release_date))
+
+movie.df <- movie.df %>%
+  # calculate profitability and categorize profitability into Profit / Break Even / Loss
+  mutate(
+    profitability = revenue - budget,
+    profit_loss = case_when(profitability > 0 ~ "Profit", profitability == 0 ~ "Break Even", TRUE ~ "Loss")
+  ) %>%
+  # rearrange columns for convenience
+  select(movie_id, title, release_date, budget, revenue, profitability, profit_loss, runtime, popularity, vote_average, vote_count,
+         everything())
+```
+
+# Summary Statistic
+
+Below are statistics for quantitative variables and release dates.
+
+```{r echo=FALSE}
+movie.df <- movie.df %>%
+  # standardize unit of measurement for budget, revenue and profitability to $ Million.
+  mutate(
+    budget = round(budget / 1000000, 2),
+    revenue = round(revenue / 1000000, 2),
+    profitability = round(profitability / 1000000, 2)
+  )
+
+movie.df %>% select_if(~ is.numeric(.) | is.Date(.)) %>%
+  summary()
+```
+
+The data sets include movies from Sept 1916 to Feb 2017. Highest budget is $ `r label_comma()(max(movie.df$budget))` million, revenue $ `r label_comma()(max(movie.df$revenue))` million and the most profitable movie was $ `r label_comma()(max(movie.df$profitability))` million in profit.
+
+
+# Qualitative Analysis
+
+## Keyword / Idea / Story Line
+
+For a starter, let's identify keywords for movies that recorded profit of $ 50 million and above. 75% (3rd Quartile) of movies in the data set recorded profitability of $ 55 million and above, hence I am doing deep dive into keywords of Top 25% of movies.
+
+```{r echo=FALSE}
+movie.df %>% filter(profitability >= 50) %>%
+  mutate(
+    keywords = str_extract_all(keywords, regex('(?<=\\\"name\\\":\\s\\\")[a-zA-Z\\s]+(?=\\\")'))
+  ) %>%
+  unnest_longer(keywords) %>%
+  count(keywords, name = "total") %>%
+  slice_max(n = 100, order_by = total) %>%
+  wordcloud2::wordcloud2(size = 0.2)
+
+```
+
+
+
+Word cloud above highlights _during credits stringer_, _after credits stinger_ & _based on novel_ as Top 3 keywords out of Top 100 most frequent keywords. This is followed by keywords such as _sequel_, _super hero_, _violence_, _marvel comic_, _dystopia_, _based on comic book_, _women director_, _revenge_, _friendship_ and _alien_.
+
+These keywords return some blockbuster movies - _Avatar_, _Jurassic World_, _Marvel Avenger_ series, _Frozen_ (animation), _Minions_ (animation) and _Transformer_ series.
+
+
+```{r echo=FALSE}
+top_keywords <- c(
+  "duringcreditsstringer", "aftercreditsstinger", "based on novel", "sequel",
+  "superhero", "violence", "marvel comic", "dystopia", "based on comic book",
+  "women director", "revenge", "friendship", "alien"
+)
+
+movie.df %>% filter(profitability >= 50) %>%
+  mutate(
+    keywords = str_extract_all(keywords, regex('(?<=\\\"name\\\":\\s\\\")[a-zA-Z\\s]+(?=\\\")'))
+  ) %>%
+  unnest_longer(keywords) %>%
+  filter(keywords %in% top_keywords) %>%
+  select(title, release_date, profitability) %>%
+  distinct() %>%
+  slice_max(order_by = profitability, n = 20) %>%
+  rename(
+    `Movie Title` = title,
+    `Release Date` = release_date,
+    `Profitability` = profitability
+  )
+
+```
+
+
+Now, let's turn our attention to loss-making movies, particularly movie suffered losses of at least $ 1 Million.
+
+```{r echo=FALSE}
+movie.df %>% filter(profitability <= -1) %>%
+  mutate(
+    keywords = str_extract_all(keywords, regex('(?<=\\\"name\\\":\\s\\\")[a-zA-Z\\s]+(?=\\\")'))
+  ) %>%
+  unnest_longer(keywords) %>%
+  count(keywords, name = "total") %>%
+  slice_max(n = 100, order_by = total) %>%
+  wordcloud2::wordcloud2(size = 0.2)
+
+```
+
+It is quite a surprise that loss-making movies share some common top keywords of profit-making movies: _during credits stinger_, _after credits stinger_, _dystopia_, _violence_, _based on novel_, _women director_ and _revenge_. However, _women director_, _independent film_ (new) & _murder_(new)  emerge as the Top 3 most frequent keywords.
+
+```{r echo=FALSE}
+top_keywords <- c(
+  "duringcreditsstringer", "aftercreditsstinger", "based on novel", "violence", "dystopia",
+  "women director", "independent film", "revenge", "murder", "sex", "biography", "new york",
+  "suspense", "friendship", "biography"
+)
+
+movie.df %>% filter(profitability <= -1.00) %>%
+  mutate(
+    keywords = str_extract_all(keywords, regex('(?<=\\\"name\\\":\\s\\\")[a-zA-Z\\s]+(?=\\\")'))
+  ) %>%
+  unnest_longer(keywords) %>%
+  filter(keywords %in% top_keywords) %>%
+  select(title, release_date, profitability) %>%
+  distinct() %>%
+  slice_min(order_by = profitability, n = 20) %>%
+  rename(
+    `Movie Title` = title,
+    `Release Date` = release_date,
+    `Profitability` = profitability
+  )
+
+```
+
+
+Table above shows Top 20 loss-making movies based on the keywords. _Final Fantasy: The Spirit Within_ is based on the famous _Final Fantasy_ game and _Dragonball Evolution_ is originated from the well known _Dragon Ball_ Japanese comic, however, they suffered huge losses.
+
+
+## Genres
+
+```{r echo=FALSE}
+movie.df %>%
+  mutate(
+    genres = str_extract_all(genres, regex('(?<=\\\"name\\\":\\s\\\")[a-zA-Z]+(?=\\\")'))
+  ) %>%
+  unnest_longer(genres) %>%
+  mutate(genres = fct(genres)) %>%
+  group_by(genres, profit_loss) %>% summarise(total = n()) %>%
+  ggplot(aes(total, genres)) +
+  theme_classic() +
+  geom_col() +
+  facet_grid(. ~ profit_loss) +
+  labs(
+    title = "Movie Statistic breakdown by Genres",
+    caption = "Figure 4",
+    x = "Total Movie",
+    y = NULL
+  )
+```
+
+
+Based on Figure 4, it is clear that genres such as _Comedy_, _Romance_, _Horror_, _Crime_, _Thriller_, _Drama_, _Adventure_ and _Action_ top the list of profit-making movies. Movies that are loss-making / break-even also share the same genres.
+
+
+## Language
+
+
+```{r echo=FALSE, fig.width=10, fig.height=5}
+movie.df %>%
+  mutate(
+    spoken_languages = str_extract_all(spoken_languages, regex('(?<=\\\"name\\\":\\s\\\")[a-zA-Z]+(?=\\\")'))
+  ) %>%
+  unnest_longer(spoken_languages) %>%
+  mutate(spoken_languages = fct_infreq(fct_lump_prop(spoken_languages, 0.05))) %>%
+  group_by(spoken_languages, profit_loss) %>% summarise(total = n()) %>%
+  ggplot(aes(spoken_languages, total)) +
+  theme_classic() +
+  geom_col() +
+  scale_y_continuous(labels = scales::comma) +
+  facet_grid(. ~ profit_loss) +
+  labs(
+    title = "Movie Statistic breakdown by Spoken Languages",
+    caption = "Figure 5",
+    x = NULL,
+    y = "Total Movie"
+  )
+```
+
+Most movies are English-oriented hence language doesn't matter for profitability either.
+
+
+## Production Companies
+
+```{r echo=FALSE, fig.height=12, fig.width=8}
+movie.df %>%
+  mutate(
+    production_companies = str_extract_all(production_companies, regex('(?<=\\\"name\\\":\\s\\\")[a-zA-Z\\s]+(?=\\\")'))
+  ) %>%
+  unnest_longer(production_companies) %>%
+  mutate(
+    producer = case_when(
+      str_detect(production_companies, "Universal") ~ "Universal Pictures",
+      str_detect(production_companies, "Paramount") ~ "Paramount Pictures",
+      str_detect(production_companies, "Warner Bros") ~ "Warner Bros",
+      str_detect(production_companies, "Twentieth Century") ~ "Twentieth Century",
+      str_detect(production_companies, "DreamWorks") ~ "DreamWorks",
+      str_detect(production_companies, "Columbia ") ~ "Columbia Pictures",
+      str_detect(production_companies, "New Line Cinema") ~ "New Line Cinema",
+      str_detect(production_companies, "Walt Disney") ~ "Walt Disney",
+      str_detect(production_companies, "Marvel Studios") ~ "Marvel Studios",
+      str_detect(production_companies, "Summit Entertainment") ~ "Summit Entertainment",
+      str_detect(production_companies, "Sony") ~ "Sony Pictures",
+      str_detect(production_companies, "Pixar") ~ "Pixar",
+      str_detect(production_companies, "Relativity Media") ~ "Relativity Media",
+      str_detect(production_companies, "Amblin") ~ "Amblin Entertainment",
+      str_detect(production_companies, "Miramax") ~ "Miramax",
+      str_detect(production_companies, "Lionsgate") ~ "Lionsgate",
+      str_detect(production_companies, "Village Roadshow") ~ "Village Roadshow",
+      str_detect(production_companies, "BBC") ~ "BBC",
+      TRUE ~ "Others"
+    ),
+    producer = fct(producer)
+  ) %>%
+  filter(producer != "Others") %>%
+  group_by(producer, profit_loss) %>% summarise(total = n()) %>%
+  ggplot(aes(total, reorder(producer, -total), fill = profit_loss)) +
+  theme_linedraw() +
+  geom_col() +
+  labs(
+    title = "Loss-Making / Break Even / Profit-Making Movie by Production Company",
+    caption = "Figure 6",
+    x = "Movies",
+    y = NULL,
+    fill = NULL
+  )
+  
+```
+
+
+Figure 6 shows globally well-known production companies, for instance, _Universal Pictures_, _Warner Bros_ and _Twentieth Century_.
+These are well established movie producers. Notice all of them produced more profitable movies than loss-making one. _Pixar_ and _Marvel Studio_ were pretty impressive as all movies produced are profitable, although they produced the least movies among all production companies.
+
+Marvel Studios is well known for the Marvel Avenger series, Iron Man series and other super-hero movies. Pixar have been famous for animation such Wall-E, Toy Story series and Finding Nemo. It is fair to say that even the world's major producers can't guarantee profitability of a movie.
+
+
+## Casts
+
+Given complexity of a movie, number of actors / actresses involved could be huge. With this in mind, my analysis will only focus on specific individual which has been part of some blockbuster movies, _Tom Cruise_ and _Denzel Washington_. Let's find out some of their movies, loss-making or profitable, given their fame. Of course, I believe any actor / actress would have worked for some blockbuster, low quality and okay-okay movies.
+
+```{r echo=FALSE, fig.height=10, fig.width=8}
+movie.df %>%
+  mutate(
+    cast = str_extract_all(cast, regex('(?<=\\\"name\\\":\\s\\\")[a-z\\s]+(?=\\\")', ignore_case = TRUE))
+  ) %>%
+  unnest_longer(cast) %>%
+  filter(cast == "Tom Cruise") %>%
+  ggplot(aes(profitability, reorder(paste(title, "-", year(release_date)), -year(release_date)), fill = profit_loss)) +
+  theme_classic() +
+  geom_col() +
+  scale_fill_manual(values = c("Profit" = "#73C6B6", "Loss" = "#F1948A")) +
+  labs(
+    title = "Movies with Tom Cruise",
+    caption = "Figure 7",
+    y = NULL,
+    x = "$ Million",
+    fill = NULL
+  ) +
+  theme(
+    axis.line = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+```
+
+```{r echo=FALSE, fig.height=10, fig.width=8}
+movie.df %>%
+  mutate(
+    cast = str_extract_all(cast, regex('(?<=\\\"name\\\":\\s\\\")[a-z\\s]+(?=\\\")', ignore_case = TRUE))
+  ) %>%
+  unnest_longer(cast) %>%
+  filter(cast == "Denzel Washington") %>%
+  ggplot(aes(profitability, reorder(paste(title, "-", year(release_date)), -year(release_date)), fill = profit_loss)) +
+  theme_classic() +
+  geom_col() +
+  scale_fill_manual(values = c("Profit" = "#73C6B6", "Loss" = "#F1948A", "Break Even" = "Gray")) +
+  labs(
+    title = "Movies with Denzel Washington",
+    caption = "Figure 8",
+    y = NULL,
+    x = "$ Million",
+    fill = NULL
+  ) +
+  theme(
+    axis.line = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+```
+
+We can observe from Figure 7 (Tom Cruise) & Figure 8 (Denzel Washington) that popular celebrities such as Tom Cruise and Denzel Washington were part of blockbuster movies (Mission Impossible series & Equalizer) that are extremely profitable and also few loss-making movies (Rock of Ages & He Got Game) between 1980s and 2000s. Take Tom Cruise for example. He become a super star after the release of Mission Impossible series in 1996, 2000 & 2007, but Magnolia (1996), Lions of Lambs (2007) don't share the same fate and Rock of Ages (2012) even suffered losses.
+
+Denzel Washington didn't involved in any movie series like Tom Cruise did between 1980s and 2000s, however, he did deliver consistently profitable movies, except for a few loss-making movies in 1990s.
+
+This mean fame of an actor / actress carry lots of weight but fame alone is not the only factor that gives glory to a movie. Speaking of fame / popularity, *_how does audience / director / production company evaluates popularity of an actor / actress worth the investment?_*
+
+
+# Quantitative Analysis
+
+## Correlation among key variables
+
+Identify any relationship (positive / negative / none) among the key variables such as _budget_, _revenue_, _runtime_, _vote_average_, 
+_vote_count_ with _profitability_. How much each key variable contributes toward _profitability_, if any relationship is identified.
+
+The result is known as **correlation coefficient (r)**. Example: _r = 0.78_ indicates **positive** & **strong** relationship.
+
+```{r echo=FALSE}
+movie.df %>%
+  select_if(is.numeric) %>%
+  correlate() %>%
+  autoplot() + labs(
+    title = "Figure 9: Correlation among Key Variables"
+  )
+```
+
+Figure 9 above shows budget, revenue, vote count and popularity are the main factors contribute significantly to profitability.
+
+Logically, budget for movie is given & fixed and producers tend to determine if casts, story line and etc of the movie attract movie-goers.
+In other word, casts (ie: Tom Cruise) and unique idea / story line (ie: mission impossibles) are the lead factors that contribute to vote count and/or popularity and revenue, and in turn makes a movie a huge success (measured in profitability). Vote count, popularity, revenue and profit are lag factors.
+
+Therefore, I should only focus more on non-financial metrics - vote count & popularity.
+
+```{r echo=FALSE}
+movie.df %>%
+  ggplot(aes(popularity, profitability)) +
+  theme_minimal() +
+  geom_jitter(alpha = 0.5, size = 2) +
+  geom_smooth(color = "red") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Popularity vs Profitability",
+    x = "Popularity",
+    y = "$ 'M",
+    caption = "Figure 10"
+  )
+```
+
+Figure 10 produces an interesting finding where popularity of a movie contribute to profitability only to certain extent. Among all movies, a few movies were extremely popular (popularity > 500) and only one hit $ 1 billion profit. In contrary, there are also less popular movies (popularity < 250) and recorded $ 1 billion and more in profit.
+
+```{r echo=FALSE}
+movie.df %>%
+  ggplot(aes(vote_count, profitability)) +
+  theme_minimal() +
+  geom_jitter(alpha = 0.5, size = 2) +
+  geom_smooth(color = "red") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(
+    title = "Vote Count vs Profitability",
+    x = "Vote Count",
+    y = "$ 'M",
+    caption = "Figure 11"
+  )
+```
+
+Refer to Figure 11, the trend is more obvious where higher vote count translates to higher profit. This is especially true where vote count is within the range of 7,500.
+
+From quantitative perspective, vote count is better predictor than popularity.
+
+
+## Conclusion
+
+Based on quantitative and qualitative reasons, can we jump into conclusion that success (measured in revenue & profit) of a movie is the magic combination of the actor / actress and story? Should we attribute the glory to director as well?
+
